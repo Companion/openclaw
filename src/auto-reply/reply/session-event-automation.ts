@@ -178,14 +178,13 @@ export async function settleSessionEventTurn(params: {
   const { automation, runId, deliveryEvidence } = params;
   const failed = params.outcome !== "completed";
   const failureCause = deliveryEvidence?.failureCause;
+  const configurationRefusal = failed ? resolveCronConfigurationRefusal(failureCause) : undefined;
   const presentedError =
     deliveryEvidence?.meta?.error?.message ||
     deliveryEvidence?.payloads?.find((payload) => payload.isError && payload.text?.trim())?.text;
-  // An optional scheduled reply may blank its failure text; the owner's cause is then the record.
+  // Preserve this owned refusal when optional replies suppress it, without expanding unrelated errors.
   const ownedCause =
-    failed && !presentedError && failureCause !== undefined
-      ? formatErrorMessage(failureCause)
-      : undefined;
+    configurationRefusal && !presentedError ? formatErrorMessage(failureCause) : undefined;
   if (failed) {
     params.onFailure(
       presentedError || ownedCause || `Session event execution ${params.outcome}`,
@@ -237,7 +236,7 @@ export async function settleSessionEventTurn(params: {
         : createCronRunDiagnosticsFromAgentResult(deliveryEvidence, {
             finalStatus: failed ? "error" : "ok",
           }),
-      ...(failed ? resolveCronConfigurationRefusal(failureCause) : undefined),
+      ...configurationRefusal,
     },
   };
 

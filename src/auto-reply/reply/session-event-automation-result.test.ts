@@ -608,72 +608,81 @@ it.for([
   },
 );
 
-it("records a scheduled account refusal as the run's permanent cause without chat failure text", async ({
-  signal,
-}) => {
-  await withOpenClawTestState(
-    { label: "automation-account-refusal", env: { OPENCLAW_TEST_FAST: "0" } },
-    async (state) => {
-      const cfg = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(cfg);
-      await state.writeConfig(cfg);
-      openOpenClawStateDatabase();
-      const scope = { agentId: "main", sessionKey: "agent:main:automation-account-refusal" };
-      const sessionId = "automation-account-refusal-session";
-      await replaceSessionEntry(scope, {
-        sessionId,
-        updatedAt: Date.now(),
-        permissionMode: "full",
-      });
-      const refusal = createUnrecordedScheduledAccountRefusal({
-        runtime: "codex",
-        modelRef: "openai/gpt-5.5",
-        profileId: "openai:synthetic-account",
-      });
-      model.mockReset().mockImplementation(async (params) => {
-        await admitModelTurn(params);
-        throw refusal;
-      });
-      try {
-        const outcome = await runGatewayCronSessionEvent(
-          {
-            occurrence: TEST_SCHEDULED_OCCURRENCE,
-            job: makeCronJob({
-              id: "account-refusal-job",
-              agentId: "main",
-              sessionTarget: `session:${scope.sessionKey}`,
-              delivery: { mode: "none" },
-              payload: { kind: "agentTurn", message: "Supervise the synthetic work." },
-            }),
-            text: "Supervise the synthetic work.",
-            admissionSource: "operator-schedule",
-            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
-            abortSignal: signal,
-            assertCurrent() {},
-          },
-          createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
-        );
-        expect(outcome).toMatchObject({
-          status: "error",
-          error: refusal.message,
-          errorClassification: { kind: "permanent" },
-          failureNotificationDetail: { kind: "inference-account-unrecorded" },
+it.for(["stored", "direct", "unrelated"] as const)(
+  "records %s failure without expanding private causes or chat text",
+  async (source, { signal }) => {
+    await withOpenClawTestState(
+      { label: "automation-account-refusal", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const cfg = completionConfig(state.workspaceDir);
+        setRuntimeConfigSnapshot(cfg);
+        await state.writeConfig(cfg);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:automation-account-refusal" };
+        const sessionId = "automation-account-refusal-session";
+        await replaceSessionEntry(scope, {
+          sessionId,
+          updatedAt: Date.now(),
+          permissionMode: "full",
         });
-        expect(outcome.diagnostics?.summary).toContain(
-          "Automation has no recorded inference account",
-        );
-        const transcript = JSON.stringify(
-          (await loadTranscriptEvents({ ...scope, sessionId })).map(readTranscriptEventMessage),
-        );
-        expect(transcript).not.toContain("no recorded inference account");
-        expect(model).toHaveBeenCalledOnce();
-      } finally {
-        await drainGlobalSingletonLifecycleState("restart");
-        resetSystemEventsForTest();
-      }
-    },
-  );
-});
+        const refusal =
+          source === "unrelated"
+            ? new Error("Synthetic outer failure", {
+                cause: new Error("Synthetic private nested detail"),
+              })
+            : createUnrecordedScheduledAccountRefusal({
+                runtime: "codex",
+                modelRef: "openai/gpt-5.5",
+                profileId: source === "stored" ? "openai:synthetic-account" : undefined,
+              });
+        model.mockReset().mockImplementation(async (params) => {
+          await admitModelTurn(params);
+          throw refusal;
+        });
+        try {
+          const outcome = await runGatewayCronSessionEvent(
+            {
+              occurrence: TEST_SCHEDULED_OCCURRENCE,
+              job: makeCronJob({
+                id: "account-refusal-job",
+                agentId: "main",
+                sessionTarget: `session:${scope.sessionKey}`,
+                delivery: { mode: "none" },
+                payload: { kind: "agentTurn", message: "Supervise the synthetic work." },
+              }),
+              text: "Supervise the synthetic work.",
+              admissionSource: "operator-schedule",
+              deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
+              abortSignal: signal,
+              assertCurrent() {},
+            },
+            createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
+          );
+          expect(outcome.status).toBe("error");
+          expect(outcome.error).toContain(refusal.message);
+          expect(outcome.error).not.toContain("Synthetic private nested detail");
+          if (source !== "unrelated") {
+            expect(outcome).toMatchObject({
+              errorClassification: { kind: "permanent" },
+              failureNotificationDetail: { kind: "inference-account-unrecorded" },
+            });
+            expect(outcome.diagnostics?.summary).toContain(
+              "Automation has no recorded inference account",
+            );
+          }
+          const transcript = JSON.stringify(
+            (await loadTranscriptEvents({ ...scope, sessionId })).map(readTranscriptEventMessage),
+          );
+          expect(transcript).not.toContain("no recorded inference account");
+          expect(model).toHaveBeenCalledOnce();
+        } finally {
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
+      },
+    );
+  },
+);
 
 it.for([
   "user",
