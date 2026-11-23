@@ -286,7 +286,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started"])(
         sendState: outcome === "run started" ? "waiting-idle" : "failed",
       });
       if (outcome !== "run started") {
-        expect(host.lastError).toContain("operator.admin");
+        expect(host.lastError).toBe("You don’t have permission to do this.");
       }
     }
   },
