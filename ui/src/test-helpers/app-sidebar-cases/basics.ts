@@ -67,6 +67,7 @@ async function mountNavigation(
 it("honors deployment policy and existing Community dismissals", async () => {
   localStorage.setItem("openclaw:control-ui:community-invite:v2", "dismissed");
   const { sidebar, context, find } = await mountAgentSidebar(undefined, null);
+  sidebar.communityInviteAllowed = true;
   const fetch = vi.spyOn(globalThis, "fetch");
   try {
     for (const enabled of [true, false]) {
