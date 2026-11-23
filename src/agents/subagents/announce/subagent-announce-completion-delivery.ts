@@ -1,7 +1,7 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
-import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operator-tool-gateway-authority.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
@@ -12,6 +12,10 @@ import { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbo
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
@@ -29,7 +33,7 @@ import {
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
-import { MISSING_REPLY_NOTICE_TEXT, type ReplyExpectation } from "../../reply-completion.js";
+import type { ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   hasAnnounceSendEvidence,
@@ -74,9 +78,14 @@ export async function runAnnounceAgentCall(params: {
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
   const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
-  const lifecycleSignal = params.signal
-    ? AbortSignal.any([params.signal, sourceLifecycle.signal])
-    : sourceLifecycle.signal;
+  const gatewayOwner =
+    params.resolveGatewayContext &&
+    getCanonicalGatewayContextResolver(params.resolveGatewayContext);
+  const lifecycleSignal = AbortSignal.any([
+    sourceLifecycle.signal,
+    ...(params.signal ? [params.signal] : []),
+    ...(gatewayOwner ? [getGatewayContextLifetime(gatewayOwner).signal] : []),
+  ]);
   const signal = AbortSignal.any([lifecycleSignal, deadline.signal]);
   // A private input stays owned by Gateway admission when an observer times out.
   // Caller or source lifecycle cancellation still stops that underlying turn.
@@ -93,7 +102,7 @@ export async function runAnnounceAgentCall(params: {
   try {
     signal.throwIfAborted();
     const dispatch = () =>
-      runOutsideAdmittedGenerationScopes(async () => {
+      runOutsideAdmittedTurnScopes(async () => {
         if (params.onBeforeDispatch) {
           await params.onBeforeDispatch();
         }
@@ -202,7 +211,7 @@ export function resolvePrivateCompletionDeliveryResult(
   origin?: DeliveryContext,
 ): SubagentAnnounceDeliveryResult {
   const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
-  if (outcome?.reason === "cancelled") {
+  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
     return {
       delivered: false,
       path: "direct",
@@ -273,11 +282,7 @@ type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVo
 function collectDirectCompletionContent(params: {
   agentResult?: { payloads?: unknown };
   events: readonly AgentInternalEvent[] | undefined;
-  contentKind: "completed_result" | "failed_notice";
 }): DirectCompletionContent | undefined {
-  if (params.contentKind === "failed_notice") {
-    return { content: MISSING_REPLY_NOTICE_TEXT, mediaUrls: [] };
-  }
   const collect = (payloads: readonly unknown[]): DirectCompletionContent | undefined => {
     const textParts: string[] = [];
     const mediaUrls = new Set<string>();
@@ -373,7 +378,6 @@ export async function deliverCompletionDirect(params: {
     threadId?: string;
   };
   internalEvents?: readonly AgentInternalEvent[];
-  contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
   agentResult?: { payloads?: unknown };
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
@@ -383,9 +387,7 @@ export async function deliverCompletionDirect(params: {
   const completionContent = collectDirectCompletionContent({
     agentResult: params.agentResult,
     events: params.internalEvents,
-    contentKind: params.contentKind,
   });
-  // A failed completion must not deliver partial child media as its result.
   const content = completionContent?.content;
   const mediaUrls = completionContent?.mediaUrls ?? [];
   const audioAsVoice = completionContent?.audioAsVoice === true;

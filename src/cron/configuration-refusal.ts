@@ -1,5 +1,5 @@
 import { isUnrecordedScheduledAccountRefusal } from "../agents/scheduled-unrecorded-account.js";
-import type { CronFailureNotificationDetail, CronRunOutcome } from "./types.js";
+import type { CronRunOutcome } from "./types.js";
 
 /** Classifies deterministic setup refusals that no retry of the same job can change. */
 export function resolveCronConfigurationRefusal(
@@ -11,9 +11,4 @@ export function resolveCronConfigurationRefusal(
         failureNotificationDetail: { kind: "inference-account-unrecorded" },
       }
     : undefined;
-}
-
-/** True when the failure's closed detail names a setup refusal that pauses the job at once. */
-export function isCronConfigurationRefusal(detail?: CronFailureNotificationDetail): boolean {
-  return detail?.kind === "inference-account-unrecorded";
 }
