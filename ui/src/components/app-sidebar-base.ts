@@ -324,6 +324,7 @@ export abstract class AppSidebarBase {
       method: "sessions.create",
       params: {},
       sessionScope: true,
+      missingScopeReasonKey: "sessionsView.createPermissionDenied",
     });
   }
 
