@@ -241,4 +241,29 @@ describe("completion source-reply authority", () => {
     ).rejects.toThrow("authoritative current conversation");
     expect(commandSecretGateway.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
+
+  it("replies in the current Control UI conversation through the private sink", async () => {
+    const { tool } = createFixture({
+      currentChannelProvider: "webchat",
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      agentSessionKey: "agent:main:dashboard:control-ui",
+    });
+
+    const result = await tool.execute("control-ui", { action: "send", message: "completion" });
+
+    expect(result.details).toMatchObject({ channel: "webchat", sourceReplySink: "internal-ui" });
+    for (const args of [
+      { channel: "telegram" },
+      { target: "channel:other" },
+      { accountId: "other-account" },
+      { threadId: "thread-2" },
+      { replyTo: "message-2" },
+    ]) {
+      await expect(
+        tool.execute("control-ui-other", { action: "send", message: "completion", ...args }),
+      ).rejects.toThrow(/Completion source replies/);
+    }
+  });
 });

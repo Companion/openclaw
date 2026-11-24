@@ -136,7 +136,11 @@ export function enforceSourceReplyOnlyMessageAction(params: {
       .map((target) => normalizeOptionalString(target))
       .filter((target): target is string => Boolean(target)),
   );
-  if (!sourceChannel || sourceTargets.length === 0) {
+  // A Control UI conversation has no external target; its replies use the private sink.
+  if (
+    !sourceChannel ||
+    (sourceTargets.length === 0 && sourceChannel !== INTERNAL_MESSAGE_CHANNEL)
+  ) {
     throw sourceReplyPolicyError(
       "Completion source replies require an authoritative current conversation.",
     );
